@@ -1,24 +1,32 @@
 pipeline {
     agent none
 
-    options {
-        skipDefaultCheckout()
-        timestamps()
-    }
+    options { skipDefaultCheckout() }
+
     stages {
+
         stage('Get Code') {
             agent any
             steps {
                 deleteDir()
+
                 withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
                     sh '''
                         set -e
+
                         git clone --branch develop https://$GH_USER:$GH_PAT@github.com/alvaro-unir/todo-list-aws.git .
+
+                        mkdir -p .ci-config
+                        git clone --depth 1 --branch staging https://github.com/alvaro-unir/todo-list-aws-config.git .ci-config
+
+                        cp .ci-config/samconfig.toml ./samconfig.toml
                     '''
                 }
+
                 stash name: 'code', includes: '**'
             }
         }
+
         stage('Static Test') {
             agent { label 'static-test' }
             steps {
@@ -46,18 +54,19 @@ pipeline {
                 }
             }
         }
+
         stage('Deploy') {
             agent any
             steps {
                 deleteDir()
                 unstash 'code'
+
                 sh '''
                     set -e
                     sam build
-                    sam deploy --config-env staging
+                    sam deploy --config-env default
                 '''
 
-                // Guardamos la URL en un fichero y lo "stash-eamos" para que el agente de REST la recupere
                 script {
                     def baseUrl = sh(
                         script: '''
@@ -71,9 +80,11 @@ pipeline {
 
                     writeFile file: 'base_url.txt', text: baseUrl + "\n"
                 }
+
                 stash name: 'envinfo', includes: 'base_url.txt'
             }
         }
+
         stage('Rest Test') {
             agent { label 'rest-test' }
             steps {
@@ -82,18 +93,16 @@ pipeline {
                     unstash 'code'
                     unstash 'envinfo'
 
-                    script {
-                        env.BASE_URL = readFile('base_url.txt').trim()
-                    }
-
                     sh '''
                         set -e
+                        export BASE_URL="$(cat base_url.txt)"
                         echo "BASE_URL=$BASE_URL"
                         pytest test/integration/todoApiTest.py
                     '''
                 }
             }
         }
+
         stage('Promote') {
             agent any
             steps {
@@ -107,13 +116,17 @@ pipeline {
                         git config user.name  "jenkins"
 
                         git fetch origin develop
-                        git merge --no-ff origin/develop -m "Release" || true
 
-                        # Resolver el caso modify/delete (CHANGELOG.md borrado en master y modificado en develop)
-                        if git ls-files -u | grep -q . ; then
-                          git checkout --theirs -- CHANGELOG.md || true
+                        set +e
+                        git merge --no-ff origin/develop -m "Release"
+                        MERGE_RC=$?
+                        set -e
+
+                        if [ "$MERGE_RC" -ne 0 ]; then
+                          git checkout --theirs -- .
                           git add -A
-                          git commit -m "Release (auto-resolve)" || true
+                          git diff --name-only --diff-filter=U | grep -q . && { echo "Unresolved conflicts remain"; exit 1; }
+                          git commit -m "Release"
                         fi
 
                         git push origin master
@@ -121,11 +134,9 @@ pipeline {
                 }
             }
         }
-        stage('Cleanup') {
-            agent any
-            steps {
-                cleanWs()
-            }
-        }
+    }
+
+    post {
+        always { cleanWs() }
     }
 }
