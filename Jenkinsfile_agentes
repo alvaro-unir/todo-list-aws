@@ -77,7 +77,6 @@ pipeline {
         stage('Rest Test') {
             agent { label 'rest-test' }
             steps {
-                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                     deleteDir()
                     unstash 'code'
                     unstash 'envinfo'
@@ -87,7 +86,6 @@ pipeline {
                         echo "BASE_URL=$BASE_URL"
                         pytest test/integration/todoApiTest.py
                     '''
-                }
             }
         }
 
