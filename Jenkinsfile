@@ -59,7 +59,7 @@ pipeline {
                 sh '''
                     set -e
                     sam build
-                    # En el repo config (rama staging) el "default" ya apunta a staging
+                    # En el repo config (rama staging), el entorno "default" debe apuntar a staging
                     sam deploy --config-env default
                 '''
             }
@@ -69,6 +69,7 @@ pipeline {
             steps {
                 deleteDir()
                 unstash 'code'
+
                 sh '''
                     set -e
 
@@ -78,7 +79,18 @@ pipeline {
                       --output text)"
 
                     echo "BASE_URL=$BASE_URL"
-                    pytest test/integration/todoApiTest.py
+
+                    set +e
+                    pytest test/integration/todoApiTest.py --junitxml=result-rest.xml
+                    echo $? > pytest_rc
+                    set -e
+                '''
+
+                junit testResults: 'result-rest.xml', allowEmptyResults: true
+
+                sh '''
+                    RC="$(cat pytest_rc)"
+                    exit "$RC"
                 '''
             }
         }
@@ -105,7 +117,7 @@ pipeline {
                           git checkout --theirs -- .
                           git add -A
                           git diff --name-only --diff-filter=U | grep -q . && { echo "Unresolved conflicts remain"; exit 1; }
-                          git commit -m "Release"
+                          git commit -m "Release (auto-resolve)"
                         fi
 
                         git push origin master
