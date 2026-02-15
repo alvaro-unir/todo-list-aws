@@ -6,3 +6,4 @@ pyenvunittests
 .coverage
 coverage.xml
 .c9
+flake8.out
