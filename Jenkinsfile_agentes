@@ -1,16 +1,20 @@
 pipeline {
     agent none
+
     options { skipDefaultCheckout() }
 
     stages {
 
         stage('Get Code') {
-            agent any
+            agent { label 'jenkins' }
             steps {
                 deleteDir()
+                sh 'whoami && hostname'
+
                 withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
                     sh '''
                         set -e
+
                         git clone --branch develop https://$GH_USER:$GH_PAT@github.com/alvaro-unir/todo-list-aws.git .
 
                         mkdir -p .ci-config
@@ -18,6 +22,7 @@ pipeline {
                         cp .ci-config/samconfig.toml ./samconfig.toml
                     '''
                 }
+
                 stash name: 'code', includes: '**'
             }
         }
@@ -25,6 +30,8 @@ pipeline {
         stage('Static Test') {
             agent { label 'static-test' }
             steps {
+                sh 'whoami && hostname'
+
                 catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS') {
                     deleteDir()
                     unstash 'code'
@@ -36,7 +43,8 @@ pipeline {
                         test -s flake8.out || echo "flake8: no issues found" > flake8.out
 
                         export PYTHONPATH="$WORKSPACE"
-                        bandit -r src -f custom --msg-template "{abspath}:{line}: [{test_id}] {msg}" > bandit.out 2>&1
+                        bandit -r src -f custom \
+                          --msg-template "{abspath}:{line}: [{test_id}] {msg}" > bandit.out 2>&1
                         test -s bandit.out || echo "bandit: no issues found" > bandit.out
 
                         exit 0
@@ -51,8 +59,10 @@ pipeline {
         }
 
         stage('Deploy') {
-            agent any
+            agent { label 'jenkins' }
             steps {
+                sh 'whoami && hostname'
+
                 deleteDir()
                 unstash 'code'
 
@@ -63,7 +73,7 @@ pipeline {
                 '''
 
                 script {
-                    def baseUrl = sh(
+                    def url = sh(
                         script: '''
                             aws cloudformation describe-stacks \
                               --stack-name todo-list-aws-staging \
@@ -73,7 +83,7 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    writeFile file: 'base_url.txt', text: baseUrl + "\n"
+                    writeFile file: 'base_url.txt', text: url
                 }
 
                 stash name: 'envinfo', includes: 'base_url.txt'
@@ -83,6 +93,8 @@ pipeline {
         stage('Rest Test') {
             agent { label 'rest-test' }
             steps {
+                sh 'whoami && hostname'
+
                 deleteDir()
                 unstash 'code'
                 unstash 'envinfo'
@@ -108,16 +120,19 @@ pipeline {
         }
 
         stage('Promote') {
-            agent any
+            agent { label 'jenkins' }
             steps {
+                sh 'whoami && hostname'
+
                 deleteDir()
+
                 withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
                     sh '''
                         set -e
 
                         git clone --branch master https://$GH_USER:$GH_PAT@github.com/alvaro-unir/todo-list-aws.git .
                         git config user.email "jenkins@local"
-                        git config user.name  "jenkins"
+                        git config user.name "jenkins"
 
                         git fetch origin develop
 
@@ -129,7 +144,6 @@ pipeline {
                         if [ "$MERGE_RC" -ne 0 ]; then
                           git checkout --theirs -- .
                           git add -A
-                          git diff --name-only --diff-filter=U | grep -q . && exit 1
                           git commit -m "Release (auto-resolve)"
                         fi
 
@@ -142,7 +156,9 @@ pipeline {
 
     post {
         always {
-            node('built-in') { cleanWs() }
+            node('jenkins') {
+                cleanWs()
+            }
         }
     }
 }
