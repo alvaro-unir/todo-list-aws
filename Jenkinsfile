@@ -59,7 +59,6 @@ pipeline {
 
         stage('Rest Test') {
             steps {
-                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                     deleteDir()
                     unstash 'code'
                     sh '''
@@ -73,7 +72,6 @@ pipeline {
                         echo "BASE_URL=$BASE_URL"
                         pytest test/integration/todoApiTest.py
                     '''
-                }
             }
         }
 
