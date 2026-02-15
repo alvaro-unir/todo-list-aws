@@ -11,7 +11,14 @@ pipeline {
                 withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
                     sh '''
                         set -e
+
+                        # Repo app (develop)
                         git clone --branch develop https://$GH_USER:$GH_PAT@github.com/alvaro-unir/todo-list-aws.git .
+
+                        # Repo config (staging) -> samconfig.toml
+                        mkdir -p .ci-config
+                        git clone --depth 1 --branch staging https://github.com/alvaro-unir/todo-list-aws-config.git .ci-config
+                        cp .ci-config/samconfig.toml ./samconfig.toml
                     '''
                 }
                 stash name: 'code', includes: '**'
@@ -27,11 +34,11 @@ pipeline {
                     sh '''
                         set +e
 
-                        flake8 --exit-zero --format=pylint src > flake8.out
+                        flake8 --exit-zero --format=pylint src > flake8.out 2>&1
                         test -s flake8.out || echo "flake8: no issues found" > flake8.out
 
-                        export PYTHONPATH=$WORKSPACE
-                        bandit -r src -f custom --msg-template "{abspath}:{line}: [{test_id}] {msg}" > bandit.out
+                        export PYTHONPATH="$WORKSPACE"
+                        bandit -r src -f custom --msg-template "{abspath}:{line}: [{test_id}] {msg}" > bandit.out 2>&1
                         test -s bandit.out || echo "bandit: no issues found" > bandit.out
 
                         exit 0
@@ -52,26 +59,27 @@ pipeline {
                 sh '''
                     set -e
                     sam build
-                    sam deploy --config-env staging
+                    # En el repo config (rama staging) el "default" ya apunta a staging
+                    sam deploy --config-env default
                 '''
             }
         }
 
         stage('Rest Test') {
             steps {
-                    deleteDir()
-                    unstash 'code'
-                    sh '''
-                        set -e
+                deleteDir()
+                unstash 'code'
+                sh '''
+                    set -e
 
-                        export BASE_URL="$(aws cloudformation describe-stacks \
-                          --stack-name todo-list-aws-staging \
-                          --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" \
-                          --output text)"
+                    export BASE_URL="$(aws cloudformation describe-stacks \
+                      --stack-name todo-list-aws-staging \
+                      --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" \
+                      --output text)"
 
-                        echo "BASE_URL=$BASE_URL"
-                        pytest test/integration/todoApiTest.py
-                    '''
+                    echo "BASE_URL=$BASE_URL"
+                    pytest test/integration/todoApiTest.py
+                '''
             }
         }
 
@@ -86,6 +94,7 @@ pipeline {
                         git config user.email "jenkins@local"
                         git config user.name  "jenkins"
                         git fetch origin develop
+
                         set +e
                         git merge --no-ff origin/develop -m "Release"
                         MERGE_RC=$?
