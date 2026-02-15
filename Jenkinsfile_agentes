@@ -28,6 +28,7 @@ pipeline {
                 catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS') {
                     deleteDir()
                     unstash 'code'
+
                     sh '''
                         set +e
 
@@ -40,6 +41,7 @@ pipeline {
 
                         exit 0
                     '''
+
                     recordIssues tools: [
                         flake8(name: 'Flake8', pattern: 'flake8.out'),
                         pyLint(name: 'Bandit', pattern: 'bandit.out')
@@ -53,11 +55,13 @@ pipeline {
             steps {
                 deleteDir()
                 unstash 'code'
+
                 sh '''
                     set -e
                     sam build
                     sam deploy --config-env default
                 '''
+
                 script {
                     def baseUrl = sh(
                         script: '''
@@ -68,8 +72,10 @@ pipeline {
                         ''',
                         returnStdout: true
                     ).trim()
+
                     writeFile file: 'base_url.txt', text: baseUrl + "\n"
                 }
+
                 stash name: 'envinfo', includes: 'base_url.txt'
             }
         }
@@ -77,15 +83,27 @@ pipeline {
         stage('Rest Test') {
             agent { label 'rest-test' }
             steps {
-                    deleteDir()
-                    unstash 'code'
-                    unstash 'envinfo'
-                    sh '''
-                        set -e
-                        export BASE_URL="$(cat base_url.txt)"
-                        echo "BASE_URL=$BASE_URL"
-                        pytest test/integration/todoApiTest.py
-                    '''
+                deleteDir()
+                unstash 'code'
+                unstash 'envinfo'
+
+                sh '''
+                    set -e
+                    export BASE_URL="$(cat base_url.txt)"
+                    echo "BASE_URL=$BASE_URL"
+
+                    set +e
+                    pytest test/integration/todoApiTest.py --junitxml=result-rest.xml
+                    echo $? > pytest_rc
+                    set -e
+                '''
+
+                junit testResults: 'result-rest.xml', allowEmptyResults: true
+
+                sh '''
+                    RC="$(cat pytest_rc)"
+                    exit "$RC"
+                '''
             }
         }
 
@@ -96,6 +114,7 @@ pipeline {
                 withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
                     sh '''
                         set -e
+
                         git clone --branch master https://$GH_USER:$GH_PAT@github.com/alvaro-unir/todo-list-aws.git .
                         git config user.email "jenkins@local"
                         git config user.name  "jenkins"
@@ -108,7 +127,6 @@ pipeline {
                         set -e
 
                         if [ "$MERGE_RC" -ne 0 ]; then
-                          # Auto-resolve: nos quedamos con lo de develop
                           git checkout --theirs -- .
                           git add -A
                           git diff --name-only --diff-filter=U | grep -q . && exit 1
@@ -124,9 +142,7 @@ pipeline {
 
     post {
         always {
-            node('built-in') {
-                cleanWs()
-            }
+            node('built-in') { cleanWs() }
         }
     }
 }
