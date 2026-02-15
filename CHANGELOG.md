@@ -8,4 +8,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Versión inicial de código.
 - Prueba pipeline CI.
-- Prueba 3000 pipeline CD.
+- Prueba 3000 pipeline CD..
