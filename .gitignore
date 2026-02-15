@@ -7,4 +7,3 @@ pyenvunittests
 coverage.xml
 .c9
 flake8.out
-Jenkinsfile
