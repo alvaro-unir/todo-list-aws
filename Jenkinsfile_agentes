@@ -1,131 +1,79 @@
 pipeline {
-    agent none
+    agent any
 
-    options {
-        skipDefaultCheckout()
-        timestamps()
-    }
+    options { skipDefaultCheckout() }
+
     stages {
+
         stage('Get Code') {
-            agent any
             steps {
                 deleteDir()
-                withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
+                withCredentials([usernamePassword(
+                    credentialsId: 'github-pat',
+                    usernameVariable: 'GH_USER',
+                    passwordVariable: 'GH_PAT'
+                )]) {
                     sh '''
                         set -e
-                        git clone --branch develop https://$GH_USER:$GH_PAT@github.com/alvaro-unir/todo-list-aws.git .
+                        git clone --branch master https://$GH_USER:$GH_PAT@github.com/alvaro-unir/todo-list-aws.git .
                     '''
                 }
                 stash name: 'code', includes: '**'
             }
         }
-        stage('Static Test') {
-            agent { label 'static-test' }
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS') {
-                    deleteDir()
-                    unstash 'code'
 
-                    sh '''
-                        set +e
+        stage('Deploy Production') {
+            agent { label 'built-in' }
 
-                        flake8 --exit-zero --format=pylint src > flake8.out
-                        test -s flake8.out || echo "flake8: no issues found" > flake8.out
-
-                        export PYTHONPATH="$WORKSPACE"
-                        bandit -r src -f custom --msg-template "{abspath}:{line}: [{test_id}] {msg}" > bandit.out
-                        test -s bandit.out || echo "bandit: no issues found" > bandit.out
-
-                        exit 0
-                    '''
-
-                    recordIssues tools: [
-                        flake8(name: 'Flake8', pattern: 'flake8.out'),
-                        pyLint(name: 'Bandit', pattern: 'bandit.out')
-                    ]
-                }
-            }
-        }
-        stage('Deploy') {
-            agent any
             steps {
                 deleteDir()
                 unstash 'code'
+
                 sh '''
                     set -e
                     sam build
-                    sam deploy --config-env staging
+                    sam deploy --config-env production
                 '''
 
-                // Guardamos la URL en un fichero y lo "stash-eamos" para que el agente de REST la recupere
                 script {
                     def baseUrl = sh(
                         script: '''
                             aws cloudformation describe-stacks \
-                              --stack-name todo-list-aws-staging \
+                              --stack-name todo-list-aws-production \
                               --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" \
                               --output text
                         ''',
                         returnStdout: true
                     ).trim()
 
-                    writeFile file: 'base_url.txt', text: baseUrl + "\n"
+                    writeFile file: 'base_url.txt', text: baseUrl
                 }
+
                 stash name: 'envinfo', includes: 'base_url.txt'
             }
         }
-        stage('Rest Test') {
+
+        stage('Rest Test Production') {
             agent { label 'rest-test' }
-            steps {
-                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
-                    deleteDir()
-                    unstash 'code'
-                    unstash 'envinfo'
 
-                    script {
-                        env.BASE_URL = readFile('base_url.txt').trim()
-                    }
-
-                    sh '''
-                        set -e
-                        echo "BASE_URL=$BASE_URL"
-                        pytest test/integration/todoApiTest.py
-                    '''
-                }
-            }
-        }
-        stage('Promote') {
-            agent any
             steps {
                 deleteDir()
-                withCredentials([usernamePassword(credentialsId: 'github-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
-                    sh '''
-                        set -e
+                unstash 'code'
+                unstash 'envinfo'
 
-                        git clone --branch master https://$GH_USER:$GH_PAT@github.com/alvaro-unir/todo-list-aws.git .
-                        git config user.email "jenkins@local"
-                        git config user.name  "jenkins"
-
-                        git fetch origin develop
-                        git merge --no-ff origin/develop -m "Release" || true
-
-                        # Resolver el caso modify/delete (CHANGELOG.md borrado en master y modificado en develop)
-                        if git ls-files -u | grep -q . ; then
-                          git checkout --theirs -- CHANGELOG.md || true
-                          git add -A
-                          git commit -m "Release (auto-resolve)" || true
-                        fi
-
-                        git push origin master
-                    '''
-                }
+                sh '''
+                    set -e
+                    export BASE_URL="$(cat base_url.txt)"
+                    echo "BASE_URL=$BASE_URL"
+                    pytest test/integration/todoApiTest.py
+                '''
             }
         }
-        stage('Cleanup') {
-            agent any
-            steps {
-                cleanWs()
-            }
+    }
+
+    post {
+        always {
+            cleanWs()
         }
     }
 }
